@@ -1,0 +1,4 @@
+#!/bin/bash
+# set -x
+# config="$1"
+APP_CONFIG=localhost npm run --prefix /aries-backchannels/vcxagencynode/vcxagency-node serve

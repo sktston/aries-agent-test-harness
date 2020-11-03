@@ -1,0 +1,202 @@
+FROM python:3.7-buster AS BASE
+
+RUN mkdir -p /aries-backchannels/bin
+WORKDIR /aries-backchannels
+
+# jump through some hoops to get a dummy cloud agent
+RUN apt-get update -y
+RUN apt-get install -y --no-install-recommends \
+      pkg-config \
+      libssl-dev \
+      libgmp3-dev \
+      curl \
+      build-essential \
+      libsqlite3-dev \
+      cmake \
+      git \
+      python3.5 \
+      python3-pip \
+      python-setuptools \
+      apt-transport-https \
+      ca-certificates \
+      debhelper \
+      wget \
+      devscripts \
+      libncursesw5-dev \
+      libzmq3-dev \
+      zip \
+      unzip \
+      jq
+
+
+RUN apt-key adv --keyserver keyserver.ubuntu.com --recv-keys CE7709D068DB5E88 \
+   && apt-get update \
+   && apt-get install -y software-properties-common \
+   && apt-get update \
+   && add-apt-repository 'deb https://repo.sovrin.org/sdk/deb bionic stable' \
+   && apt-get update \
+   && apt-get install -y libnullpay \
+   && apt-get install -y indy-cli
+
+
+# libsodium 1.0.18 for libindy build
+RUN cd /tmp && \
+   curl https://download.libsodium.org/libsodium/releases/libsodium-1.0.18.tar.gz | tar -xz && \
+    cd /tmp/libsodium-1.0.18 && \
+    ./configure --disable-shared && \
+    make && \
+    make install && \
+    rm -rf /tmp/libsodium-1.0.18
+
+# Install rust toolchain
+ARG rust_version=1.47.0
+ENV LIBRARY_PATH="$HOME/.local/lib:$LIBRARY_PATH"
+
+RUN curl -o rustup https://sh.rustup.rs && \
+    chmod +x rustup && \
+    ./rustup --default-toolchain "${rust_version}" -y
+ENV PATH="$HOME/.cargo/bin:$PATH"
+
+
+# libindy build
+ARG INDYSDK_REVISION="master"
+ARG INDYSDK_REPO="https://github.com/hyperledger/indy-sdk.git"
+WORKDIR /home/indy
+RUN git clone "${INDYSDK_REPO}" "./indy-sdk"
+RUN cd "/home/indy/indy-sdk" && git checkout "${INDYSDK_REVISION}"
+
+RUN $HOME/.cargo/bin/cargo build --release --manifest-path=/home/indy/indy-sdk/libindy/Cargo.toml
+RUN mv /home/indy/indy-sdk/libindy/target/release/*.so /usr/lib
+
+# libvcx build
+RUN $HOME/.cargo/bin/cargo build --release --manifest-path=/home/indy/indy-sdk/vcx/libvcx/Cargo.toml
+RUN mv /home/indy/indy-sdk/vcx/libvcx/target/release/*.so /usr/lib
+
+# libpostgresstorage build
+RUN $HOME/.cargo/bin/cargo build --release --manifest-path=/home/indy/indy-sdk/experimental/plugins/postgres_storage/Cargo.toml
+RUN mv /home/indy/indy-sdk/experimental/plugins/postgres_storage/target/release/*.so /usr/lib
+
+LABEL version="1.15"
+LABEL name="indysdk"
+
+
+
+FROM python:3.7-buster AS BUILD
+
+RUN mkdir -p /aries-backchannels/bin
+WORKDIR /aries-backchannels
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends\
+      libssl-dev \
+      apt-transport-https \
+      curl \
+      make \
+      g++ \
+      ca-certificates
+
+COPY --from=BASE /var/lib/dpkg/info /var/lib/dpkg/info
+COPY --from=BASE /usr/lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu
+COPY --from=BASE /usr/local /usr/local
+
+COPY --from=BASE /usr/lib/libindy.so /usr/lib/libindy.so
+COPY --from=BASE /usr/lib/libindystrgpostgres.so /usr/lib/libindystrgpostgres.so
+COPY --from=BASE /usr/lib/libnullpay.so /usr/lib/libnullpay.so
+COPY --from=BASE /usr/lib/libvcx.so /usr/lib/libvcx.so
+
+# Install nodejs 12.x
+RUN curl -sL https://deb.nodesource.com/setup_12.x | bash -
+RUN apt-get install -y nodejs
+RUN npm install -g yarn
+
+WORKDIR /home/app
+RUN git clone https://github.com/AbsaOSS/vcxagencynode.git
+
+WORKDIR /home/app/vcxagencynode/vcxagency-node
+RUN yarn install --production
+
+LABEL version="1.0"
+LABEL name="vcxnodeagency"
+
+
+FROM python:3.7-buster
+
+RUN mkdir -p /aries-backchannels/bin
+WORKDIR /aries-backchannels
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends\
+      libssl-dev \
+      apt-transport-https \
+      curl \
+#      make \
+#      g++ \
+#      automake \
+#      bison \
+#      build-essential \
+#      cmake \
+#      flex \
+      git \
+      libbz2-dev \
+      libffi-dev \
+      libgmp-dev \
+      liblzma-dev \
+      libncurses5-dev \
+      libncursesw5-dev \
+      libreadline-gplv2-dev \
+#      libsecp256k1-dev \
+      libsqlite3-dev \
+      libtool \
+      libzmq3-dev \
+      pkg-config \
+      zlib1g-dev \
+      ca-certificates
+
+COPY --from=BUILD /var/lib/dpkg/info /var/lib/dpkg/info
+COPY --from=BUILD /usr/lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu
+COPY --from=BUILD /usr/local /usr/local
+
+COPY --from=BUILD /usr/lib/libindy.so /usr/lib/libindy.so
+COPY --from=BUILD /usr/lib/libindystrgpostgres.so /usr/lib/libindystrgpostgres.so
+COPY --from=BUILD /usr/lib/libnullpay.so /usr/lib/libnullpay.so
+COPY --from=BASE /usr/lib/libvcx.so /usr/lib/libvcx.so
+
+RUN curl -sL https://deb.nodesource.com/setup_12.x | bash -
+RUN apt-get install -y nodejs
+RUN npm install -g yarn
+
+WORKDIR /aries-backchannels/vcxagencynode/easy-indysdk
+COPY --from=BUILD /home/app/vcxagencynode/easy-indysdk ./
+
+WORKDIR /aries-backchannels/vcxagencynode/vcxagency-client
+COPY --from=BUILD /home/app/vcxagencynode/vcxagency-client ./
+
+WORKDIR /aries-backchannels/vcxagencynode/vcxagency-node
+COPY --from=BUILD /home/app/vcxagencynode/vcxagency-node ./
+
+LABEL version="1.1.0"
+LABEL name="vcxagency-node"
+LABEL description="Node VCX Agency"
+
+WORKDIR /aries-backchannels
+
+COPY python/requirements.txt ./
+RUN pip install -r requirements.txt
+COPY node/requirements-node.txt ./
+RUN pip install -r requirements-node.txt
+
+# Copy the necessary files from the AATH Backchannel sub-folders
+COPY python python
+COPY node node
+COPY node/manage ./bin
+COPY data ./
+
+WORKDIR /aries-backchannels/bin
+RUN chmod 755 manage
+
+ENV RUNMODE=docker
+ENV PYTHONPATH=/aries-backchannels
+
+WORKDIR /aries-backchannels
+
+ENTRYPOINT ["python", "node/node_backchannel.py"]

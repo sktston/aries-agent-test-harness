@@ -25,6 +25,12 @@ cd indy-tails-server/docker
 ./manage start
 ```
 
+If running Node Agent, which the `./manage run -d node -t @AcceptanceTest -t ~@wip` command does, make sure the Postgres is running.
+```bash
+sudo docker pull postgres
+sudo docker run --name postgres -v pgdata:/var/lib/postgresql/data -e POSTGRES_PASSWORD=mysecretpassword -d -p 5432:5432 postgres postgres -c log_statement=all
+```
+
 The commands take a while to run (you know...building modern apps always means downloading half the internet...), so while you wait, here's what's happening:
 
 - The `von-network` commands are building and starting a docker-ized Hyperledger Indy network needed for some of the tests.
