@@ -20,7 +20,7 @@
     "cross-env": "7.0.2",
     "express": "4.17.1",
     "indy-sdk": "^1.15.0-dev-1565",
-    "minimist": "^1.2.5",
+    "minimist": "^1.2.6",
     "node-fetch": "^2.6.0"
   },
   "devDependencies": {
